@@ -1,0 +1,56 @@
+{/*  /!* Hero Section *!/*/}
+      {/*  <header className="mb-12">*/}
+      {/*    <h1 className="text-7xl md:text-8xl font-extrabold tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-purple-400 via-fuchsia-500 to-pink-500 pb-2">*/}
+      {/*      Aria*/}
+      {/*    </h1>*/}
+      {/*    <p className="text-xl md:text-2xl text-gray-400 font-light leading-relaxed mt-4">*/}
+      {/*      The ultimate platform to simulate <br className="hidden md:block" /> real-world survey responses.*/}
+      {/*    </p>*/}
+      {/*  </header>*/}
+
+      {/*  /!* Guidelines Card *!/*/}
+      {/*  <div className="flex justify-center mb-12">*/}
+      {/*    <a*/}
+      {/*      href="/guidelines"*/}
+      {/*      className="group flex items-center gap-5 p-5 pr-8 bg-white/[0.03] border border-white/10 rounded-2xl transition-all duration-300 hover:border-purple-500/40 hover:bg-white/[0.07] hover:shadow-[0_0_30px_rgba(168,85,247,0.1)]"*/}
+      {/*    >*/}
+      {/*      <div className="flex items-center justify-center w-14 h-14 rounded-xl bg-purple-500/10 text-purple-400 group-hover:bg-purple-500/20 transition-colors">*/}
+      {/*        <FiFileText size={28} />*/}
+      {/*      </div>*/}
+      {/*      <div className="text-left">*/}
+      {/*        <h3 className="font-semibold text-gray-100 text-lg">Survey Quality Guidelines</h3>*/}
+      {/*        <p className="text-sm text-gray-500">Ensure your survey meets simulation criteria</p>*/}
+      {/*      </div>*/}
+      {/*      <FiArrowRight className="ml-4 text-gray-600 group-hover:text-purple-400 group-hover:translate-x-1 transition-all" size={24} />*/}
+      {/*    </a>*/}
+      {/*  </div>*/}
+
+      {/*  /!* Input Section *!/*/}
+      {/*  <section className="space-y-6">*/}
+      {/*    <form*/}
+      {/*      onSubmit={handleSubmit}*/}
+      {/*      className="flex flex-col md:flex-row gap-3 p-2 bg-[#16161e] border border-white/10 rounded-2xl focus-within:border-purple-500/50 focus-within:ring-1 focus-within:ring-purple-500/50 transition-all shadow-2xl"*/}
+      {/*    >*/}
+      {/*      <input*/}
+      {/*        type="url"*/}
+      {/*        required*/}
+      {/*        placeholder="Paste your survey link here..."*/}
+      {/*        className="flex-1 bg-transparent px-5 py-4 text-lg outline-none placeholder:text-gray-600"*/}
+      {/*        value={surveyLink}*/}
+      {/*        onChange={(e) => setSurveyLink(e.target.value)}*/}
+      {/*      />*/}
+      {/*      <button*/}
+      {/*        type="submit"*/}
+      {/*        className="px-10 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold text-white hover:brightness-110 hover:shadow-[0_0_20px_rgba(219,39,119,0.3)] active:scale-[0.98] transition-all"*/}
+      {/*      >*/}
+      {/*        Simulate Responses*/}
+      {/*      </button>*/}
+      {/*    </form>*/}
+
+      {/*    <div className="flex items-center justify-center gap-2 text-gray-600">*/}
+      {/*      <HiOutlineShieldCheck size={18} className="text-gray-700" />*/}
+      {/*      <p className="text-sm tracking-wide">*/}
+      {/*        Secure processing. No permanent data storage.*/}
+      {/*      </p>*/}
+      {/*    </div>*/}
+      {/*  </section>*/}
