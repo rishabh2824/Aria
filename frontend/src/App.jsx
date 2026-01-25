@@ -6,6 +6,7 @@ import ShinyText from "@/components/ShinyText.jsx";
 import 'primereact/resources/themes/lara-light-indigo/theme.css';
 import AiButton from "@/components/ai-button.js";
 import Stepper, { Step } from "@/components/Stepper.jsx";
+import {CircularProgress} from "@mui/material";
 
 const AriaLanding = () => {
     const [formLink, setFormLink] = useState('');
@@ -81,42 +82,59 @@ const AriaLanding = () => {
         return !(isNaN(num) || num < 1 || num > 20);
     };
 
-    // Handle AI button click
     const handleSubmit = async () => {
         if (!isFormValid() || isSubmitting) return;
 
         setIsSubmitting(true);
 
         try {
-            const result = await fetch('http://127.0.0.1:8000/api/responses', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                },
-                body: JSON.stringify({
-                    form_link: formLink,
-                    num_responses: parseInt(numResponses),
-                    target_audience: targetAudience,
-                    user_id: user?.id || user?.email
-                })
-            });
+            const response = await fetch(
+                'http://127.0.0.1:8000/api/responses?format=csv',
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        form_link: formLink,
+                        num_responses: parseInt(numResponses),
+                        target_audience: targetAudience,
+                    })
+                }
+            );
 
-            const data = await result.json();
-
-            if (!result.ok) {
-                alert(data.detail || 'Failed to generate responses');
-                return;
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || 'Failed to generate CSV');
             }
 
-            alert('Survey responses generated successfully!');
+            // Convert response to Blob
+            const blob = await response.blob();
 
+            // Create a download link
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+
+            // Optional: timestamped filename
+            const timestamp = new Date().toISOString().split('T')[0];
+            a.download = `ai_survey_responses_${timestamp}.csv`;
+
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+
+            // Reset form
             setFormLink('');
             setNumResponses('');
             setTargetAudience('');
 
-        } catch (error) {alert(`Failed to submit: ${error.message}`);}
-        finally {setIsSubmitting(false);}
+        } catch (error) {
+            alert(`Failed to generate responses: ${error.message}`);
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     return (
@@ -247,10 +265,18 @@ const AriaLanding = () => {
                         </Stepper>
                     </div>
 
-                    {/* AI Button */}
-                    <div className={isDisabled ? 'opacity-50 pointer-events-none' : ''}>
-                        <AiButton onClick={handleSubmit}/>
+                    {/*/!* AI Button *!/*/}
+                    {/*<div className={isDisabled ? 'opacity-50 pointer-events-none' : ''}>*/}
+                    {/*    <AiButton onClick={handleSubmit}/>*/}
+                    {/*</div>*/}
+
+                    <div className={isDisabled || isSubmitting ? 'opacity-50 pointer-events-none' : ''}>
+                        <AiButton onClick={handleSubmit} />
                     </div>
+
+                    {isSubmitting && (
+                        <CircularProgress />
+                    )}
                 </>
             )}
         </div>

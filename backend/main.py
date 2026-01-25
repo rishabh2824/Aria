@@ -1,16 +1,15 @@
-import json
-from typing import Dict, Any
-import httpx
-from fastapi import FastAPI, HTTPException
+import json, csv, io, httpx, re, os
+from typing import Dict, Any, Iterable
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from google.oauth2 import id_token
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-import re
 from google.auth.transport.requests import Request
-import os
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+
 
 app = FastAPI()
 load_dotenv()
@@ -77,15 +76,35 @@ async def google_auth(token_request: TokenRequest):
 
 # Returns LLM generated responses to surveys
 @app.post("/api/responses")
-async def returnResponses(request: SurveyRequest):
+async def returnResponses(request: SurveyRequest, format: str = Query("json", enum=["json", "csv"])):
     try:
         # Validate the form URL
         Forms.getFormId(request.form_link)
 
-        # Call the main function to get responses
-        result = await Forms.getResponses(url=request.form_link, n=request.num_responses, persona=request.target_audience)
+        # Generate responses (JSON)
+        result = await Forms.getResponses(
+            url=request.form_link,
+            n=request.num_responses,
+            persona=request.target_audience
+        )
 
-        return result
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail="Failed to generate responses")
+
+        # JSON (default)
+        if format == "json":
+            return result
+
+        # CSV export
+        csv_stream = Forms.jsonToCsv(result)
+
+        return StreamingResponse(
+            csv_stream,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": "attachment; filename=ai_survey_responses.csv"
+            }
+        )
 
     except Exception as e:
         raise HTTPException(
@@ -284,15 +303,15 @@ class Forms:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "anthropic/claude-3.5-sonnet",
+                        "model": "openai/gpt-5.2",
                         "messages": [
                             {
                                 "role": "user",
                                 "content": prompt
                             }
                         ],
-                        "temperature": 0.9,
-                        "max_tokens": 10000 * n,
+                        "temperature": 0.8,
+                        "max_tokens": 15000 * n,
                     }
                 )
 
@@ -328,3 +347,39 @@ class Forms:
                     return {"success": False, "error": "Failed to parse LLM response", "raw_llm_response": llm_response}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error simulating response: {str(e)}")
+
+
+    # Converts JSON LLM response to exportable csv
+    @staticmethod
+    def jsonToCsv(survey_json: Dict[str, Any]) -> Iterable[str]:
+        def generate():
+            output = io.StringIO()
+            writer = csv.writer(output)
+
+            # Header
+            writer.writerow([
+                "respondent_id",
+                "persona_description",
+                "question_id",
+                "answer"
+            ])
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+            for respondent in survey_json.get("survey_responses", []):
+                respondent_id = respondent.get("respondent_id")
+                persona_desc = respondent.get("persona_description", "")
+
+                for r in respondent.get("responses", []):
+                    writer.writerow([
+                        respondent_id,
+                        persona_desc,
+                        r.get("question_id"),
+                        r.get("answer")
+                    ])
+                    yield output.getvalue()
+                    output.seek(0)
+                    output.truncate(0)
+
+        return generate()
