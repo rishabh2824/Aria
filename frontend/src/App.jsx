@@ -15,6 +15,7 @@ const AriaLanding = () => {
     const [isSignedIn, setIsSignedIn] = useState(false);
     const [user, setUser] = useState(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [showGuidelines, setShowGuidelines] = useState(false);
     const googleButtonRef = useRef(null);
     const isDisabled = !targetAudience.trim() || !formLink.trim() || !numResponses;
 
@@ -181,12 +182,13 @@ const AriaLanding = () => {
             )}
 
             {/* Protected Content */}
-            {isSignedIn && (
+            {isSignedIn && !showGuidelines && (
                 <>
                     {/* Survey Guidelines */}
                     <div className="flex justify-center mt-6 mb-6 z-10">
-                        <a
-                            href="/guidelines"
+                        <button
+                            type="button"
+                            onClick={() => setShowGuidelines(true)}
                             className="
                                 group flex items-center gap-5 p-5 pr-8 bg-white/[0.03] border border-white/10
                                 rounded-2xl transition-all duration-300 hover:border-purple-500/40
@@ -209,7 +211,7 @@ const AriaLanding = () => {
                                 transition-all"
                                 size={24}
                             />
-                        </a>
+                        </button>
                     </div>
 
                     {/*Form data input*/}
@@ -224,7 +226,7 @@ const AriaLanding = () => {
                             footerClassName="bg-[#1a1a3e]/30"
                         >
                             <Step>
-                                <h2 className="text-xl text-white mb-2">Enter the full link of your google form</h2>
+                                <h2 className="text-xl text-white mb-2">Enter the full link of your qualtrics survey</h2>
                                 <input
                                     value={formLink}
                                     onChange={(e) => setFormLink(e.target.value)}
@@ -265,11 +267,6 @@ const AriaLanding = () => {
                         </Stepper>
                     </div>
 
-                    {/*/!* AI Button *!/*/}
-                    {/*<div className={isDisabled ? 'opacity-50 pointer-events-none' : ''}>*/}
-                    {/*    <AiButton onClick={handleSubmit}/>*/}
-                    {/*</div>*/}
-
                     <div className={isDisabled || isSubmitting ? 'opacity-50 pointer-events-none' : ''}>
                         <AiButton onClick={handleSubmit} />
                     </div>
@@ -278,6 +275,32 @@ const AriaLanding = () => {
                         <CircularProgress />
                     )}
                 </>
+            )}
+
+            {isSignedIn && showGuidelines && (
+                <div className="relative z-10 w-full max-w-3xl px-6">
+                    <div className="bg-white/3 border border-white/10 rounded-2xl p-6">
+                        <h2 className="text-2xl font-semibold text-gray-100 mb-4">Survey Guidelines</h2>
+                        <ul className="list-disc list-inside text-gray-300 space-y-2">
+                            <li>Make sure to share your survey with full edit access to rvjain@wisc.edu</li>
+                            <li>There should be no Javascript, embedded data, or piped text throughout the survey.</li>
+                            <li>No files or images should be used as part of a question or response.</li>
+                            <li>If a multiple choice or checkbox has "Other" as an option, do not allow free-text entry for it.</li>
+                            <li>For any questions expecting a text response, specify a word-range in the question itself.</li>
+                            <li>Please avoid question types other than multiple choice, text and slider.</li>
+                        </ul>
+
+                        <div className="mt-6">
+                            <button
+                                type="button"
+                                onClick={() => setShowGuidelines(false)}
+                                className="px-4 py-2 rounded-lg bg-purple-500/20 text-purple-200 border border-purple-500/40 hover:bg-purple-500/30 transition-colors"
+                            >
+                                Back to Home
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

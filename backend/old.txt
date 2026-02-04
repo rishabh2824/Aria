@@ -1,0 +1,385 @@
+import json, csv, io, httpx, re, os
+from typing import Dict, Any, Iterable
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from google.oauth2 import id_token
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
+from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+
+app = FastAPI()
+load_dotenv()
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+SCOPES = ['https://www.googleapis.com/auth/forms.body.readonly']
+DISCOVERY_DOC = "https://forms.googleapis.com/$discovery/rest?version=v1"
+API_KEY = os.getenv("API_KEY")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+
+VALID_EMAILS = ["rvjain@wisc.edu"]
+
+class TokenRequest(BaseModel):
+    token: str
+
+class AuthResponse(BaseModel):
+    success: bool
+    message: str
+    user: dict = None
+
+class SurveyRequest(BaseModel):
+    form_link: str = Field(...)
+    num_responses: int = Field(..., ge=1, le=20)
+    target_audience: str = Field(...)
+
+@app.get("/")
+async def root(): return {"message": "Sample response generator"}
+
+@app.post("/api/auth/google", response_model=AuthResponse)
+async def google_auth(token_request: TokenRequest):
+    try:
+        # Verify the token
+        idinfo = id_token.verify_oauth2_token(
+            token_request.token,
+            Request(),
+            GOOGLE_CLIENT_ID
+        )
+
+        # Get user information from the token
+        user_email = idinfo.get('email')
+        user_id = idinfo.get('sub')
+        user_name = idinfo.get('name')
+        user_picture = idinfo.get('picture')
+
+        # Check if email is in the whitelist
+        if user_email not in VALID_EMAILS: raise HTTPException(status_code=403, detail="Invalid email")
+
+        # Return user information
+        return AuthResponse(
+            success=True,
+            message="Authentication successful",
+            user={"id": user_id, "email": user_email, "name": user_name, "avatar": user_picture}
+        )
+    except Exception as e: raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
+
+
+# Returns LLM generated responses to surveys
+@app.post("/api/responses")
+async def returnResponses(request: SurveyRequest, format: str = Query("json", enum=["json", "csv"])):
+    try:
+        # Validate the form URL
+        Forms.getFormId(request.form_link)
+
+        # Generate responses (JSON)
+        result = await Forms.getResponses(
+            url=request.form_link,
+            n=request.num_responses,
+            persona=request.target_audience
+        )
+
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail="Failed to generate responses")
+
+        # JSON (default)
+        if format == "json":
+            return result
+
+        # CSV export
+        csv_stream = Forms.jsonToCsv(result)
+
+        return StreamingResponse(
+            csv_stream,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": "attachment; filename=ai_survey_responses.csv"
+            }
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing request: {type(e).__name__}: {str(e)}"
+        )
+
+
+class Forms:
+    # Extracts the form ID from a Google Forms URL.
+    @staticmethod
+    def getFormId(url: str) -> str:
+        pattern = r'https://docs\.google\.com/forms/d/(?:e/)?([a-zA-Z0-9-_]+)'
+        match = re.search(pattern, url)
+
+        if match: return match.group(1)
+        else: raise ValueError("Invalid Google Forms URL")
+
+
+    # Get valid user credentials from environment variables or OAuth flow.
+    @staticmethod
+    def get_credentials():
+        token_file = "token.json"
+
+        if not os.path.exists(token_file):
+            raise HTTPException(status_code=500, detail="Google OAuth token.json not found")
+
+        creds = Credentials.from_authorized_user_file(token_file, SCOPES)
+
+        if creds.expired and creds.refresh_token:
+            try:
+                print("Expired:", creds.expired)
+                print("Has refresh token:", bool(creds.refresh_token))
+                print("Scopes:", creds.scopes)
+                creds.refresh(Request())
+                with open(token_file, "w") as token:
+                    token.write(creds.to_json())
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to refresh Google credentials: {str(e)}")
+
+        return creds
+
+
+    # Fetches form data from Google Forms API.
+    @staticmethod
+    async def getForm(url: str):
+        try:
+            # Extract form ID from URL
+            form_id = Forms.getFormId(url)
+
+            # Get credentials
+            creds = Forms.get_credentials()
+
+            # Build the service
+            service = build(
+                "forms",
+                "v1",
+                credentials=creds,
+                discoveryServiceUrl=DISCOVERY_DOC,
+                static_discovery=False,
+            )
+
+            # Return the form
+            return {"data": service.forms().get(formId=form_id).execute()}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error fetching form data: {type(e).__name__}: {str(e)}")
+
+
+    # Formats the Google Form data into a text prompt for the LLM
+    @staticmethod
+    def formatForm(form_data: Dict[str, Any]) -> str:
+        title = form_data.get("info", {}).get("title", "Survey")
+        description = form_data.get("info", {}).get("description", "")
+        items = form_data.get("items", [])
+
+        # Build a structured representation of the form
+        formatted_text = f"Survey Title: {title}\n"
+        if description: formatted_text += f"Description: {description}\n"
+        formatted_text += "\n--- Questions ---\n\n"
+
+        question_number = 1
+        for item in items:
+            # Skip page breaks
+            if "pageBreakItem" in item:
+                section_title = item.get("title", "")
+                section_desc = item.get("description", "")
+                formatted_text += f"\n[SECTION: {section_title}]\n"
+                if section_desc: formatted_text += f"{section_desc}\n"
+                formatted_text += "\n"
+                continue
+
+            # Process questions
+            if "questionItem" in item:
+                question_data = item["questionItem"]["question"]
+                question_id = question_data.get("questionId")
+                question_title = item.get("title", "")
+                is_required = question_data.get("required", False)
+
+                formatted_text += f"Question {question_number}: {question_title}"
+                if is_required:
+                    formatted_text += " **(Required)**"
+                formatted_text += f"\nQuestion ID: {question_id}\n"
+
+                # Handle different question types
+                if "choiceQuestion" in question_data:
+                    choice_q = question_data["choiceQuestion"]
+                    q_type = choice_q.get("type", "RADIO")
+                    options = choice_q.get("options", [])
+
+                    formatted_text += f"Type: {q_type}\n"
+                    formatted_text += "Options:\n"
+                    for idx, option in enumerate(options):
+                        if option.get("isOther"): formatted_text += f"  - Other (fill in your own)\n"
+                        else:
+                            opt_value = option.get("value", "")
+                            formatted_text += f"  - {opt_value}\n"
+
+                            # Show branching logic if exists
+                            if "goToSectionId" in option:
+                                formatted_text += f"    → Goes to section: {option['goToSectionId']}\n"
+
+                elif "textQuestion" in question_data: formatted_text += "Type: Text (short answer)\n"
+                elif "timeQuestion" in question_data: formatted_text += "Type: Time\n"
+                elif "dateQuestion" in question_data: formatted_text += "Type: Date\n"
+
+                formatted_text += "\n"
+                question_number += 1
+        return formatted_text
+
+
+    # Call the LLM and get responses
+    @staticmethod
+    async def getResponses(url: str, n: int, persona: str) -> Dict[str, Any]:
+        # Get the form data
+        form_response = await Forms.getForm(url)
+        form_data = form_response["data"]
+
+        # Format the form for the LLM
+        formatted_form = Forms.formatForm(form_data)
+
+        # Create the prompt
+        prompt = f"""You are simulating {n} different people filling out a survey. Each person should have a unique perspective and response pattern.
+
+    Target audience description: {persona}
+
+    {formatted_form}
+
+    Please generate {n} DIFFERENT survey responses, each from a unique individual that matches the target audience description above. Provide your answer in the following JSON format:
+
+    {{
+      "survey_responses": [
+        {{
+          "respondent_id": 1,
+          "persona_description": "Brief description of this specific respondent (based on the target audience)",
+          "responses": [
+            {{
+              "question_id": "question_id_here",
+              "answer": "respondent's answer here"
+            }}
+          ]
+        }},
+        {{
+          "respondent_id": 2,
+          "persona_description": "Brief description of this specific respondent",
+          "responses": [
+            {{
+              "question_id": "question_id_here",
+              "answer": "respondent's answer here"
+            }}
+          ]
+        }}
+      ]
+    }}
+
+    Rules:
+    - Generate EXACTLY {n} complete and DIFFERENT survey responses
+    - Each respondent should match the target audience description but have their own unique characteristics
+    - Each respondent should have varied but realistic answers that reflect their unique perspective
+    - For multiple choice questions, choose ONE of the provided options (use the exact text)
+    - For text questions, provide realistic responses appropriate to the target audience (1-3 sentences)
+    - For time questions, provide time in HH:MM format (24-hour)
+    - For date questions, provide date in YYYY-MM-DD format
+    - Each respondent should be consistent with their own persona throughout their responses
+    - Follow any branching logic naturally based on each respondent's choices
+    - Make sure responses vary between respondents - don't generate identical responses
+    - Ensure all responses are authentic and match what real people from this target audience would say
+
+    Respond ONLY with valid JSON, no additional text."""
+
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "openai/gpt-5.2",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        "temperature": 0.8,
+                        "max_tokens": 15000 * n,
+                    }
+                )
+
+                response.raise_for_status()
+                result = response.json()
+
+                # Extract the response content
+                llm_response = result["choices"][0]["message"]["content"]
+
+                # Parse the JSON response
+                try:
+                    # Extract JSON from code blocks if present
+                    if "```json" in llm_response: json_str = llm_response.split("```json")[1].split("```")[0].strip()
+                    elif "```" in llm_response: json_str = llm_response.split("```")[1].split("```")[0].strip()
+                    else: json_str = llm_response.strip()
+                    parsed_response = json.loads(json_str)
+
+                    # Validate we got the expected number of responses
+                    survey_responses = parsed_response.get("survey_responses", [])
+                    if len(survey_responses) != n: print(f"Expected {n} responses but got {len(survey_responses)}")
+
+                    return {
+                        "success": True,
+                        "total_responses": len(survey_responses),
+                        "requested_responses": n,
+                        "persona": persona,
+                        "survey_responses": survey_responses
+                    }
+
+                except json.JSONDecodeError as e:
+                    print(f"JSON decode error: {e}")
+                    print(f"LLM Response: {llm_response}")
+                    return {"success": False, "error": "Failed to parse LLM response", "raw_llm_response": llm_response}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error simulating response: {str(e)}")
+
+
+    # Converts JSON LLM response to exportable csv
+    @staticmethod
+    def jsonToCsv(survey_json: Dict[str, Any]) -> Iterable[str]:
+        def generate():
+            output = io.StringIO()
+            writer = csv.writer(output)
+
+            # Header
+            writer.writerow([
+                "respondent_id",
+                "persona_description",
+                "question_id",
+                "answer"
+            ])
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+            for respondent in survey_json.get("survey_responses", []):
+                respondent_id = respondent.get("respondent_id")
+                persona_desc = respondent.get("persona_description", "")
+
+                for r in respondent.get("responses", []):
+                    writer.writerow([
+                        respondent_id,
+                        persona_desc,
+                        r.get("question_id"),
+                        r.get("answer")
+                    ])
+                    yield output.getvalue()
+                    output.seek(0)
+                    output.truncate(0)
+
+        return generate()
