@@ -54,7 +54,8 @@ const AriaLanding = () => {
 
     const handleCredentialResponse = async (response) => {
         try {
-            const result = await fetch('http://127.0.0.1:8000/api/auth/google', {
+            // change to http://127.0.0.1:8000 in dev
+            const result = await fetch('https://aria-l191.onrender.com/api/auth/google', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -90,7 +91,8 @@ const AriaLanding = () => {
 
         try {
             const response = await fetch(
-                'http://127.0.0.1:8000/api/responses?format=csv',
+                // change to http://127.0.0.1:8000 in dev
+                'https://aria-l191.onrender.com/api/responses?format=csv',
                 {
                     method: 'POST',
                     headers: {
