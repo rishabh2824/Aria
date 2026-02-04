@@ -35,8 +35,8 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY") or os.getenv("API_KEY")
 SCOPES = ['https://www.googleapis.com/auth/forms.body.readonly']
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-VALID_EMAILS = ["rvjain@wisc.edu", "CHO275@WISC.EDU", "EKIM298@WISC.EDU", "MLI936@WISC.EDU", "HLIU787@WISC.EDU",
-                "RPSHAH3@WISC.EDU", "KSONG65@WISC.EDU", "JTONG9@WISC.EDU", "MZENG27@WISC.EDU"]
+VALID_EMAILS = ["rvjain@wisc.edu", "cho275@wisc.edu", "ekim298@wisc.edu", "mli936@wisc.edu", "hliu787@wisc.edu",
+                "rpshah3@wisc.edu", "ksong65@wisc.edu", "jtong9@wisc.edu", "mzeng27@wisc.edu"]
 
 
 # Base models
