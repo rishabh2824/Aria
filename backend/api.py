@@ -4,7 +4,9 @@ from pydantic import BaseModel, Field
 from google.oauth2 import id_token
 from google.auth.transport.requests import Request
 
-from main import app, Survey, GOOGLE_CLIENT_ID, VALID_EMAILS
+import fetch_survey as survey_parsing
+from app import app, GOOGLE_CLIENT_ID, VALID_EMAILS
+from survey_service import Survey
 
 
 # Base models
@@ -33,7 +35,7 @@ async def root():
 # Returns the cleaned Qualtrics Survey questions.
 @app.get("/{survey_id}")
 def fetch_survey(survey_id: str):
-    return Survey.cleanSurvey(survey_id)
+    return survey_parsing.cleanSurvey(survey_id)
 
 
 # Auth
@@ -71,7 +73,7 @@ async def google_auth(token_request: TokenRequest):
 @app.post("/api/responses")
 async def returnResponses(request: SurveyRequest, format: str = Query("json", enum=["json", "csv"])):
     try:
-        survey_id = Survey.getSurveyId(request.form_link)
+        survey_id = survey_parsing.getSurveyId(request.form_link)
         result = Survey.generateResponses(
             survey_id=survey_id,
             instructions=request.target_audience,
@@ -113,7 +115,7 @@ async def returnResponses(request: SurveyRequest, format: str = Query("json", en
 @app.post("/api/responses/qualtrics")
 async def returnResponsesToQualtrics(request: SurveyRequest):
     try:
-        survey_id = Survey.getSurveyId(request.form_link)
+        survey_id = survey_parsing.getSurveyId(request.form_link)
         result = Survey.generateResponses(
             survey_id=survey_id,
             instructions=request.target_audience,
