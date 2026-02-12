@@ -1,12 +1,9 @@
 import json, requests, re, os, csv, io, random
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 from markdownify import markdownify as md
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-from google.oauth2 import id_token
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
@@ -39,132 +36,9 @@ VALID_EMAILS = ["rvjain@wisc.edu", "cho275@wisc.edu", "ekim298@wisc.edu", "mli93
                 "rpshah3@wisc.edu", "ksong65@wisc.edu", "jtong9@wisc.edu", "mzeng27@wisc.edu"]
 
 
-# Base models
-class TokenRequest(BaseModel):
-    token: str
-
-class AuthResponse(BaseModel):
-    success: bool
-    message: str
-    user: dict = None
-
-class SurveyRequest(BaseModel):
-    form_link: str = Field(...)
-    num_responses: int = Field(..., ge=1, le=20)
-    target_audience: str = Field(...)
-
-
-# API Endpoints
-@app.get("/")
-async def root(): return {"message": "Sample response generator"}
-
-# Returns the cleaned Qualtrics Survey questions.
-@app.get("/{survey_id}")
-def fetch_survey(survey_id: str):
-    return Survey.cleanSurvey(survey_id)
-
-# Auth
-@app.post("/api/auth/google", response_model=AuthResponse)
-async def google_auth(token_request: TokenRequest):
-    try:
-        # Verify the token
-        idinfo = id_token.verify_oauth2_token(
-            token_request.token,
-            Request(),
-            GOOGLE_CLIENT_ID
-        )
-
-        # Get user information from the token
-        user_email = idinfo.get('email')
-        user_id = idinfo.get('sub')
-        user_name = idinfo.get('name')
-        user_picture = idinfo.get('picture')
-
-        # Check if email is in the whitelist
-        if user_email not in VALID_EMAILS: raise HTTPException(status_code=403, detail="Invalid email")
-
-        # Return user information
-        return AuthResponse(
-            success=True,
-            message="Authentication successful",
-            user={"id": user_id, "email": user_email, "name": user_name, "avatar": user_picture}
-        )
-    except Exception as e: raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
-
-# Returns LLM generated responses to surveys
-@app.post("/api/responses")
-async def returnResponses(request: SurveyRequest, format: str = Query("json", enum=["json", "csv"])):
-    try:
-        survey_id = Survey.getSurveyId(request.form_link)
-        result = Survey.generateResponses(
-            survey_id=survey_id,
-            instructions=request.target_audience,
-            n=request.num_responses
-        )
-
-        if "error" in result:
-            raise HTTPException(status_code=502, detail=result["error"])
-
-        import_result = Survey.postResponsesToQualtrics(
-            survey_id=survey_id,
-            simulated_responses=result.get("simulated_responses", [])
-        )
-
-        if format == "json":
-            return {
-                **result,
-                "qualtrics_import": import_result
-            }
-
-        csv_stream = Survey.jsonToCsv(result)
-        return StreamingResponse(
-            csv_stream,
-            media_type="text/csv",
-            headers={
-                "Content-Disposition": "attachment; filename=ai_survey_responses.csv",
-                "X-Qualtrics-Imported": str(import_result.get("imported", 0)),
-                "X-Qualtrics-Errors": str(len(import_result.get("errors", []))),
-            }
-        )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing request: {type(e).__name__}: {str(e)}"
-        )
-
-
-@app.post("/api/responses/qualtrics")
-async def returnResponsesToQualtrics(request: SurveyRequest):
-    try:
-        survey_id = Survey.getSurveyId(request.form_link)
-        result = Survey.generateResponses(
-            survey_id=survey_id,
-            instructions=request.target_audience,
-            n=request.num_responses
-        )
-
-        if "error" in result:
-            raise HTTPException(status_code=502, detail=result["error"])
-
-        import_result = Survey.postResponsesToQualtrics(
-            survey_id=survey_id,
-            simulated_responses=result.get("simulated_responses", [])
-        )
-
-        return {
-            "generated": result,
-            "qualtrics_import": import_result
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing request: {type(e).__name__}: {str(e)}"
-        )
-
 # Service Methods
 class Survey:
+    # Extract the survey id from the link
     @staticmethod
     def getSurveyId(form_link: str) -> str:
         match = re.search(r'(SV_[A-Za-z0-9]+)', form_link or '')
@@ -238,6 +112,7 @@ class Survey:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+    # Extract the survey definition questions
     @staticmethod
     def extractDefinitionQuestions(definition):
         root = definition.get('result', definition)
@@ -413,6 +288,7 @@ class Survey:
 
         return parse_node(branch_logic)
 
+    # Combine conditional logic
     @staticmethod
     def combineConditions(parent_cond, child_cond):
         parent_cond = Survey.normalizeConditions(parent_cond)
@@ -496,6 +372,7 @@ class Survey:
         if 'Flow' in root: traverse(root['Flow'])
         return flow_structure
 
+    #
     @staticmethod
     def mapQuestions(blocks):
         mapping = {}
@@ -513,6 +390,7 @@ class Survey:
                     if qid: mapping[qid] = block_id
         return mapping
 
+    #
     @staticmethod
     def mergeFlow(cleaned_questions, question_to_block, flow_structure):
         block_flow = {
@@ -544,6 +422,7 @@ class Survey:
 
         return cleaned_questions
 
+    #
     @staticmethod
     def numberValidation(validation):
         settings = validation.get('settings', {})
@@ -622,6 +501,7 @@ class Survey:
             'flow_structure': flow_structure
         }
 
+    #
     @staticmethod
     def buildChoiceMap(questions):
         choice_map = {}
@@ -684,6 +564,7 @@ class Survey:
             supported_qids
         )
 
+    #
     @staticmethod
     def mapResponseValue(qid, value, choice_map, multi_select_qids, slider_qids):
         if value is None:
@@ -744,16 +625,9 @@ class Survey:
 
         return Survey.coerceNumeric(value)
 
+    #
     @staticmethod
-    def buildQualtricsValues(
-        simulated_response,
-        choice_map,
-        multi_select_qids,
-        slider_qids,
-        required_qids,
-        default_choice_by_qid,
-        supported_qids
-    ):
+    def buildQualtricsValues(simulated_response, choice_map, multi_select_qids, slider_qids, required_qids, default_choice_by_qid, supported_qids):
         values = {}
         responses = simulated_response.get("responses", {})
         if not isinstance(responses, dict):
@@ -1442,3 +1316,7 @@ class Survey:
                         output.truncate(0)
 
         return generate()
+
+
+# Register API routes after all dependencies are defined.
+import api
