@@ -38,6 +38,22 @@ def fetch_survey(survey_id: str):
     return survey_parsing.cleanSurvey(survey_id)
 
 
+# Returns the exact LLM payload JSON for a survey.
+@app.get("/{survey_id}/llm-payload")
+def fetch_llm_payload(
+    survey_id: str,
+    instructions: str = Query(...),
+    n: int = Query(1, ge=1, le=20),
+    model: str = Query("openai/gpt-4o")
+):
+    return Survey.build_llm_payload(
+        survey_id=survey_id,
+        instructions=instructions,
+        n=n,
+        model=model
+    )
+
+
 # Auth
 @app.post("/api/auth/google", response_model=AuthResponse)
 async def google_auth(token_request: TokenRequest):

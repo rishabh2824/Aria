@@ -452,42 +452,13 @@ class Survey:
         url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-        # System Prompt
-        system_context = f"""
-        You are an expert Survey Simulation Engine. You have been provided with the structure and logic of a Qualtrics survey in JSON format.
-
-        ### INSTRUCTIONS:
-        1. **Simulate {n} distinct participants** taking this survey.
-        2. **Persona**: All participants must fit this description: "{instructions}".
-        3. **Behavior**:
-           - Respect all branching logic (e.g., if a user selects "No" and the logic skips a block, do not answer questions in that block).
-           - Vary the answers realistically within the bounds of the persona.
-        ### OUTPUT FORMAT:
-        Return ONLY a valid JSON array of objects. Do not include markdown formatting (like ```json).
-        Each object in the array represents one participant and must have this structure:
-        [
-          {{
-            "participant_id": 1,
-            "persona_notes": "Brief specific details about this simulated user",
-            "path_taken": ["BlockID_1", "BlockID_2"],
-            "responses": {{
-                "QID1": "Selected Choice Text",
-                "QID2": "Open ended text response..."
-            }}
-          }},
-          ...
-        ]
-        """
-
-        # Construct the Payload
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_context},
-                {"role": "user", "content": f"Survey Structure JSON:\n{json.dumps(survey_data)}"}
-            ],
-            "temperature": 0.7
-        }
+        payload = Survey.build_llm_payload(
+            survey_id=survey_id,
+            instructions=instructions,
+            n=n,
+            model=model,
+            survey_data=survey_data
+        )
 
         # Send Request
         try:
@@ -521,6 +492,46 @@ class Survey:
         except requests.exceptions.RequestException as e:
             raise HTTPException(status_code=502, detail=f"OpenRouter API Error: {str(e)}")
         except json.JSONDecodeError: return {"error": "Model did not return valid JSON", "raw_output": content}
+
+    @staticmethod
+    def build_llm_payload(survey_id: str, instructions: str, n: int, model: str = "openai/gpt-4o", survey_data=None):
+        if survey_data is None:
+            survey_data = survey_parsing.cleanSurvey(survey_id)
+
+        system_context = f"""
+        You are an expert Survey Simulation Engine. You have been provided with the structure and logic of a Qualtrics survey in JSON format.
+
+        ### INSTRUCTIONS:
+        1. **Simulate {n} distinct participants** taking this survey.
+        2. **Persona**: All participants must fit this description: "{instructions}".
+        3. **Behavior**:
+           - Respect all branching logic (e.g., if a user selects "No" and the logic skips a block, do not answer questions in that block).
+           - Vary the answers realistically within the bounds of the persona.
+        ### OUTPUT FORMAT:
+        Return ONLY a valid JSON array of objects. Do not include markdown formatting (like ```json).
+        Each object in the array represents one participant and must have this structure:
+        [
+          {{
+            "participant_id": 1,
+            "persona_notes": "Brief specific details about this simulated user",
+            "path_taken": ["BlockID_1", "BlockID_2"],
+            "responses": {{
+                "QID1": "Selected Choice Text",
+                "QID2": "Open ended text response..."
+            }}
+          }},
+          ...
+        ]
+        """
+
+        return {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_context},
+                {"role": "user", "content": f"Survey Structure JSON:\n{json.dumps(survey_data)}"}
+            ],
+            "temperature": 0.7
+        }
 
     # Converts JSON LLM response to exportable csv
     @staticmethod
