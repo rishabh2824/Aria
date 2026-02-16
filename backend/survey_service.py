@@ -175,7 +175,7 @@ class Survey:
         if isinstance(raw, dict):
             found = survey_parsing.findNestedValue(
                 raw,
-                ["Constant", "Value", "Text", "SelectedChoice", "ChoiceID", "ChoiceLocator"]
+                ["Constant", "Value", "Text", "SelectedChoice", "ChoiceID", "ChoiceLocator", "RightOperand"]
             )
             if found not in (None, {}):
                 tokens |= Survey.tokensFromValue(found)
@@ -242,13 +242,17 @@ class Survey:
         return False
 
     @staticmethod
-    def conditionSatisfied(cond, responses, choice_texts_by_qid):
+    def conditionSatisfied(cond, responses, choice_texts_by_qid, embedded_data=None):
         if not isinstance(cond, dict):
             return False
         qid = cond.get('question_id')
-        if not qid:
+        embedded_field = cond.get('embedded_field')
+        if not qid and not embedded_field:
             return False
-        answer = responses.get(qid)
+        if embedded_field:
+            answer = (embedded_data or {}).get(embedded_field)
+        else:
+            answer = responses.get(qid)
         operator = Survey.normalizeOperator(cond.get('operator'))
         expected = Survey.expectedTokens(cond, choice_texts_by_qid)
 
@@ -286,12 +290,12 @@ class Survey:
         return False
 
     @staticmethod
-    def conditionsSatisfied(conditions, responses, choice_texts_by_qid):
+    def conditionsSatisfied(conditions, responses, choice_texts_by_qid, embedded_data=None):
         if not conditions:
             return True
         if isinstance(conditions, list):
             for cond in conditions:
-                if not Survey.conditionsSatisfied(cond, responses, choice_texts_by_qid):
+                if not Survey.conditionsSatisfied(cond, responses, choice_texts_by_qid, embedded_data):
                     return False
             return True
         if isinstance(conditions, dict):
@@ -299,9 +303,9 @@ class Survey:
                 op = (conditions.get('op') or 'and').lower()
                 items = conditions.get('conditions') or []
                 if op == 'or':
-                    return any(Survey.conditionsSatisfied(item, responses, choice_texts_by_qid) for item in items)
-                return all(Survey.conditionsSatisfied(item, responses, choice_texts_by_qid) for item in items)
-            return Survey.conditionSatisfied(conditions, responses, choice_texts_by_qid)
+                    return any(Survey.conditionsSatisfied(item, responses, choice_texts_by_qid, embedded_data) for item in items)
+                return all(Survey.conditionsSatisfied(item, responses, choice_texts_by_qid, embedded_data) for item in items)
+            return Survey.conditionSatisfied(conditions, responses, choice_texts_by_qid, embedded_data)
         return False
 
     @staticmethod
@@ -356,6 +360,71 @@ class Survey:
         return selected_by_randomizer
 
     @staticmethod
+    def selectRandomizedEmbeddedBranches(flow_structure, participant_seed=None):
+        randomizer_info = {}
+        for item in flow_structure:
+            if item.get('type') != 'embedded_data':
+                continue
+            rand_id = item.get('randomizer_id')
+            branch_id = item.get('branch_id')
+            if not rand_id or not branch_id:
+                continue
+            entry = randomizer_info.setdefault(
+                rand_id,
+                {
+                    'subset_size': item.get('randomizer_subset_size'),
+                    'branches': set()
+                }
+            )
+            entry['branches'].add(branch_id)
+
+        selected_by_randomizer = {}
+        for rand_id, info in randomizer_info.items():
+            branches = list(info['branches'])
+            subset = info.get('subset_size')
+            if not subset or subset >= len(branches):
+                selected = set(branches)
+            else:
+                rng = random.Random(f"{participant_seed}:{rand_id}:embedded")
+                selected = set(rng.sample(branches, k=subset))
+            selected_by_randomizer[rand_id] = selected
+
+        return selected_by_randomizer
+
+    @staticmethod
+    def buildEmbeddedData(participant_seed, flow_structure, responses, choice_texts_by_qid):
+        embedded_data = {}
+        if not flow_structure:
+            return embedded_data
+
+        selected_branches_by_randomizer = Survey.selectRandomizedEmbeddedBranches(
+            flow_structure,
+            participant_seed
+        )
+
+        for item in flow_structure:
+            if item.get('type') != 'embedded_data':
+                continue
+            rand_id = item.get('randomizer_id')
+            branch_id = item.get('branch_id')
+            if rand_id and branch_id:
+                selected_branches = selected_branches_by_randomizer.get(rand_id)
+                if selected_branches is not None and branch_id not in selected_branches:
+                    continue
+
+            conditions = item.get('condition')
+            if conditions and not Survey.conditionsSatisfied(conditions, responses, choice_texts_by_qid, embedded_data):
+                continue
+
+            for entry in item.get('embedded_data', []) or []:
+                field = entry.get('field')
+                if not field:
+                    continue
+                embedded_data[field] = entry.get('value')
+
+        return embedded_data
+
+    @staticmethod
     def applyConditionalLogic(simulated_responses, survey_data, choice_texts_by_qid, question_logic_by_qid=None):
         questions = survey_data.get('questions', {})
         flow_structure = survey_data.get('flow_structure', [])
@@ -370,6 +439,13 @@ class Survey:
 
             participant_seed = participant.get('participant_id', idx)
             selected_by_randomizer = Survey.selectRandomizedBlocks(questions, participant_seed)
+            embedded_data = Survey.buildEmbeddedData(
+                participant_seed,
+                flow_structure,
+                responses,
+                choice_texts_by_qid
+            )
+            participant['embedded_data'] = embedded_data
 
             current = dict(responses)
             for _ in range(5):
@@ -395,7 +471,7 @@ class Survey:
                     if not is_conditional:
                         filtered[qid] = answer
                         continue
-                    if Survey.conditionsSatisfied(conditions, current, choice_texts_by_qid):
+                    if Survey.conditionsSatisfied(conditions, current, choice_texts_by_qid, embedded_data):
                         filtered[qid] = answer
                 if len(filtered) == len(current):
                     current = filtered
@@ -506,6 +582,8 @@ class Survey:
         2. **Persona**: All participants must fit this description: "{instructions}".
         3. **Behavior**:
            - Respect all branching logic (e.g., if a user selects "No" and the logic skips a block, do not answer questions in that block).
+           - The survey may include embedded data fields (see `metadata.embedded_data_fields`) that can affect which questions are shown.
+             You may include an `embedded_data` object per participant, but if omitted it will be inferred from the survey flow.
            - Vary the answers realistically within the bounds of the persona.
         ### OUTPUT FORMAT:
         Return ONLY a valid JSON array of objects. Do not include markdown formatting (like ```json).
@@ -515,6 +593,7 @@ class Survey:
             "participant_id": 1,
             "persona_notes": "Brief specific details about this simulated user",
             "path_taken": ["BlockID_1", "BlockID_2"],
+            "embedded_data": {{"field_name": "value"}},
             "responses": {{
                 "QID1": "Selected Choice Text",
                 "QID2": "Open ended text response..."

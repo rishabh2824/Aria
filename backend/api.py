@@ -25,6 +25,34 @@ class SurveyRequest(BaseModel):
     num_responses: int = Field(..., ge=1, le=20)
     target_audience: str = Field(...)
 
+class LlmPayloadRequest(BaseModel):
+    form_link: str = Field(...)
+    num_responses: int = Field(..., ge=1, le=20)
+    target_audience: str = Field(...)
+    model: str = Field("openai/gpt-4o")
+
+class LogicDebugRequest(BaseModel):
+    form_link: str = Field(...)
+    qids: list[str] | None = None
+
+class FlowDebugRequest(BaseModel):
+    form_link: str = Field(...)
+
+class QuestionDebugRequest(BaseModel):
+    form_link: str = Field(...)
+    qids: list[str]
+
+class SurveyQuestionDebugRequest(BaseModel):
+    form_link: str = Field(...)
+    qids: list[str]
+
+class DefinitionQuestionDebugRequest(BaseModel):
+    form_link: str = Field(...)
+    qids: list[str]
+
+class DefinitionSummaryRequest(BaseModel):
+    form_link: str = Field(...)
+
 
 # API Endpoints
 @app.get("/")
@@ -32,26 +60,161 @@ async def root():
     return {"message": "Sample response generator"}
 
 
-# Returns the cleaned Qualtrics Survey questions.
-@app.get("/{survey_id}")
-def fetch_survey(survey_id: str):
-    return survey_parsing.cleanSurvey(survey_id)
-
-
 # Returns the exact LLM payload JSON for a survey.
-@app.get("/{survey_id}/llm-payload")
-def fetch_llm_payload(
-    survey_id: str,
-    instructions: str = Query(...),
-    n: int = Query(1, ge=1, le=20),
-    model: str = Query("openai/gpt-4o")
-):
+@app.post("/api/llm-payload")
+async def fetch_llm_payload(request: LlmPayloadRequest):
+    survey_id = survey_parsing.getSurveyId(request.form_link)
     return Survey.build_llm_payload(
         survey_id=survey_id,
-        instructions=instructions,
-        n=n,
-        model=model
+        instructions=request.target_audience,
+        n=request.num_responses,
+        model=request.model
     )
+
+
+@app.post("/api/debug/logic")
+async def debug_logic(request: LogicDebugRequest):
+    survey_id = survey_parsing.getSurveyId(request.form_link)
+    definition = survey_parsing.getSurveyDefinition(survey_id)
+    def_questions = survey_parsing.extractDefinitionQuestions(definition)
+
+    logic_keys = [
+        "DisplayLogic",
+        "displayLogic",
+        "DisplayLogicExpression",
+        "displayLogicExpression",
+        "DisplayLogicInput",
+        "displayLogicInput",
+    ]
+
+    if request.qids:
+        qids = request.qids
+    else:
+        qids = [
+            qid for qid, payload in def_questions.items()
+            if survey_parsing.findNestedValue(payload, logic_keys) is not None
+        ]
+
+    debug = {}
+    for qid in qids:
+        payload = def_questions.get(qid) or {}
+        raw_logic = survey_parsing.findNestedValue(payload, logic_keys)
+        debug[qid] = {
+            "has_logic": raw_logic is not None,
+            "raw_logic": raw_logic,
+            "parsed_conditions": survey_parsing.parseBranchLogic(raw_logic) if raw_logic else None,
+        }
+
+    return {
+        "survey_id": survey_id,
+        "qids": qids,
+        "logic": debug
+    }
+
+
+@app.post("/api/debug/flow")
+async def debug_flow(request: FlowDebugRequest):
+    survey_id = survey_parsing.getSurveyId(request.form_link)
+    flow = survey_parsing.getSurveyFlow(survey_id)
+    root = flow.get('result', flow)
+    items = root.get('Flow', [])
+
+    def flatten(items, out):
+        if not isinstance(items, list):
+            return
+        for item in items:
+            out.append(item)
+            if 'Flow' in item:
+                flatten(item.get('Flow'), out)
+
+    all_items = []
+    flatten(items, all_items)
+
+    branches = []
+    for item in all_items:
+        if item.get('Type') != 'Branch':
+            continue
+        raw_logic = item.get('BranchLogic')
+        branches.append({
+            "flow_id": item.get('FlowID'),
+            "description": item.get('Description'),
+            "raw_logic": raw_logic,
+            "parsed_conditions": survey_parsing.parseBranchLogic(raw_logic) if raw_logic else None
+        })
+
+    return {
+        "survey_id": survey_id,
+        "branches": branches
+    }
+
+
+@app.post("/api/debug/question-definition")
+async def debug_question_definition(request: QuestionDebugRequest):
+    survey_id = survey_parsing.getSurveyId(request.form_link)
+    definition = survey_parsing.getSurveyDefinition(survey_id)
+    def_questions = survey_parsing.extractDefinitionQuestions(definition)
+
+    out = {}
+    for qid in request.qids:
+        out[qid] = def_questions.get(qid)
+
+    return {
+        "survey_id": survey_id,
+        "questions": out
+    }
+
+
+@app.post("/api/debug/survey-questions")
+async def debug_survey_questions(request: SurveyQuestionDebugRequest):
+    survey_id = survey_parsing.getSurveyId(request.form_link)
+    survey = survey_parsing.getSurvey(survey_id)
+    questions = survey.get('result', {}).get('questions', {})
+
+    out = {}
+    for qid in request.qids:
+        out[qid] = questions.get(qid)
+
+    return {
+        "survey_id": survey_id,
+        "questions": out
+    }
+
+
+@app.post("/api/debug/definition-questions")
+async def debug_definition_questions(request: DefinitionQuestionDebugRequest):
+    survey_id = survey_parsing.getSurveyId(request.form_link)
+    out = {}
+    for qid in request.qids:
+        out[qid] = survey_parsing.getSurveyQuestionDefinition(survey_id, qid)
+    return {
+        "survey_id": survey_id,
+        "questions": out
+    }
+
+
+@app.post("/api/debug/definition-summary")
+async def debug_definition_summary(request: DefinitionSummaryRequest):
+    survey_id = survey_parsing.getSurveyId(request.form_link)
+    definition = survey_parsing.getSurveyDefinition(survey_id)
+    root = definition.get('result', definition)
+    elements = root.get('SurveyElements', [])
+    sq_ids = []
+    sq_labels = {}
+    for element in elements:
+        if element.get('Element') != 'SQ':
+            continue
+        qid = element.get('PrimaryAttribute')
+        if qid:
+            sq_ids.append(qid)
+            payload = element.get('Payload', {}) or {}
+            label = payload.get('QuestionText') or payload.get('QuestionText', '')
+            sq_labels[qid] = label
+    return {
+        "survey_id": survey_id,
+        "sq_count": len(sq_ids),
+        "sq_ids": sq_ids,
+        "sq_labels": sq_labels
+    }
 
 
 # Auth
@@ -120,36 +283,6 @@ async def returnResponses(request: SurveyRequest, format: str = Query("json", en
                 "X-Qualtrics-Errors": str(len(import_result.get("errors", []))),
             }
         )
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error processing request: {type(e).__name__}: {str(e)}"
-        )
-
-
-@app.post("/api/responses/qualtrics")
-async def returnResponsesToQualtrics(request: SurveyRequest):
-    try:
-        survey_id = survey_parsing.getSurveyId(request.form_link)
-        result = Survey.generateResponses(
-            survey_id=survey_id,
-            instructions=request.target_audience,
-            n=request.num_responses
-        )
-
-        if "error" in result:
-            raise HTTPException(status_code=502, detail=result["error"])
-
-        import_result = Survey.postResponsesToQualtrics(
-            survey_id=survey_id,
-            simulated_responses=result.get("simulated_responses", [])
-        )
-
-        return {
-            "generated": result,
-            "qualtrics_import": import_result
-        }
 
     except Exception as e:
         raise HTTPException(

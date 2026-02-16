@@ -104,12 +104,37 @@ def cleanSurvey(survey_id: str):
     question_to_block = mapQuestions(blocks)
     enriched_questions = mergeFlow(cleaned_questions, question_to_block, flow_structure)
 
+    embedded_fields = {}
+    for item in flow_structure:
+        if item.get('type') != 'embedded_data':
+            continue
+        for entry in item.get('embedded_data', []) or []:
+            field = entry.get('field')
+            if not field:
+                continue
+            info = embedded_fields.setdefault(
+                field,
+                {'variable_type': entry.get('variable_type'), 'values': set()}
+            )
+            if not info.get('variable_type') and entry.get('variable_type'):
+                info['variable_type'] = entry.get('variable_type')
+            if entry.get('value') is not None:
+                info['values'].add(entry.get('value'))
+
+    embedded_fields_out = {}
+    for field, info in embedded_fields.items():
+        embedded_fields_out[field] = {
+            'variable_type': info.get('variable_type'),
+            'values': sorted(info.get('values', set()))
+        }
+
     return {
         'metadata': {
             'survey_id': survey_id,
             'total_questions': len(enriched_questions),
             'has_conditional_logic': any(f['type'] == 'branch' for f in flow_structure),
-            'has_randomization': any(f['type'] == 'randomizer' for f in flow_structure)
+            'has_randomization': any(f['type'] == 'randomizer' for f in flow_structure),
+            'embedded_data_fields': embedded_fields_out
         },
         'questions': enriched_questions,
         'flow_structure': flow_structure
